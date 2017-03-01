@@ -19,9 +19,10 @@ Map<dynamic, dynamic> cloneMapOfClonables(Map<dynamic, dynamic> from) {
 class Game {
   Stopwatch watch = new Stopwatch();
   int factoryCount, linkCount;
-  List<List<int>> distances = [];
   GameState gameState;
   StatesHolder statesHolder;
+  Distances distances;
+  int bombsCount = 2;
 
   void start() {
     _readInput();
@@ -37,17 +38,20 @@ class Game {
     linkCount = int.parse(stdin.readLineSync());
     Logger.debug(factoryCount);
     Logger.debug(linkCount);
+    var raw = [];
     for (var i = 0; i < linkCount; i++) {
       var line = stdin.readLineSync();
       Logger.debug(line);
-      distances.add(line.split(' ').map((part) => int.parse(part)).toList());
+      raw.add(line.split(' ').map((part) => int.parse(part)).toList());
     }
+    distances = new Distances(factoryCount, raw);
   }
 
   void _readEntities() {
     gameState = new GameState();
     statesHolder = new StatesHolder(gameState);
     int entityCount = int.parse(stdin.readLineSync());
+    Logger.debug(entityCount);
     for (int i = 0; i < entityCount; i++) {
       var inputs = stdin.readLineSync().split(' ');
       Logger.debug(inputs.join(' '));
@@ -71,61 +75,62 @@ class Game {
     }
   }
 
-  List<Factory> getOrderedClosest(List<Factory> to) {
-    Map<int, List> closest = {};
-    List<Factory> closestFactories = [];
-    List toIds = to.fold([], (List ids, factory) => ids..add(factory.id));
-    distances.forEach((item) {
-      if (!toIds.contains(item[0]) && !toIds.contains(item[1]) || toIds.contains(item[0]) && toIds.contains(item[1]))
-        return;
-      var id = item[toIds.contains(item[0]) ? 1 : 0];
-      if (!closest.containsKey(id))
-        closest[id] = [gameState.factories[id], 0];
-      if (closest[id][1] < item[2]) {
-        closest[id][0] = gameState.factories[id];
-        closest[id][1] = item[2];
-      }
+  List<int> getTargets(List<int> to) {
+    var targets = distances.getDistancesTo(to, statesHolder);
+    List<int> ordered = targets.keys.toList();
+    ordered.sort((a, b) {
+      var aWeight = targets[a]/* + gameState.factories[a].cyborgs*/ - gameState.factories[a].production * 2;
+      var bWeight = targets[b]/* + gameState.factories[b].cyborgs*/ - gameState.factories[b].production * 2;
+      return aWeight.compareTo(bWeight);
     });
-    closest.values.toList()..sort((a, b) => a[1].compareTo(b[1]))..forEach((item) => closestFactories.add(item[0]));
 
-    return closestFactories;
-  }
-
-  int getDistanceBetween(int from, int to) {
-    return distances.firstWhere((item) => item[0] == from && item[1] == to || item[1] == from && item[0] == to)[2];
+    return ordered;
   }
 
   void _loop() {
-    Logger.info('loop');
     _readEntities();
-    int freeCyborgs = gameState.getOwnCyborgsCount();
-    var cyborgFactories = gameState.getOwnFactoriesWithCyborgs();
-    var closest = getOrderedClosest(cyborgFactories);
-    var targets = closest.where((factory) {
-      var attackers = gameState.getFactoryTroopsComing(factory).fold(0, (sum, troop) => sum + troop.cyborgs);
-      var afterFight = factory.cyborgs - attackers;
-      var enough = afterFight >= 0 && afterFight < freeCyborgs;
-      if (enough)
-        freeCyborgs -= afterFight + 1;
-      return enough;
+    Logger.info('loop');
+    var ownFactories = gameState.getOwnFactoriesWithCyborgs().fold([], (List ids, factory) => ids..add(factory.id));
+    List<List<int>> bombs = [];
+    if (gameState.getScoreDiff() < -10 && bombsCount > 0) {
+      Factory target = gameState.getLargestFactories()[0];
+      var own = gameState.getOwnFactories().fold([], (List ids, factory) => ids..add(factory.id));
+      bombs.add([distances.getClosestSimple(target.id, own), target.id]);
+      bombsCount--;
+    }
+    var closest = getTargets(ownFactories);
+    List<List<int>> move = [];
+    Map<int, Factory> factoriesGlobal = cloneMapOfClonables(gameState.factories);
+    closest.forEach((factoryId) {
+      List<List<dynamic>> attackers = [];
+      var factoriesLocal = cloneMapOfClonables(factoriesGlobal);
+      var closestOurs = distances.getClosest(factoryId, ownFactories, statesHolder);
+      var i = 0, cyborgsSent = 0, enemyCyborgs = 0;
+      while (i < closestOurs.length && cyborgsSent <= enemyCyborgs) {
+        var from = closestOurs[i];
+        enemyCyborgs = statesHolder.getFactoryAtStep(factoryId, from[1]).cyborgs;
+        var cyborgs = min(enemyCyborgs - cyborgsSent + 1, factoriesLocal[from[0]].cyborgs);
+        cyborgsSent += cyborgs;
+        factoriesLocal[from[0]].cyborgs -= cyborgs;
+        if (cyborgs > 0) {
+          attackers.add([from[0], distances.getPath(from[0], factoryId, statesHolder)['path'][1], cyborgs,
+            'to ${factoryId}']);
+        }
+        i++;
+      }
+      if (cyborgsSent >= enemyCyborgs) {
+        move.addAll(attackers);
+        factoriesGlobal = factoriesLocal;
+      }
     });
-    if (targets.isNotEmpty) {
-      var moves = [];
-      targets.forEach((target) {
-        var source = gameState.getMostCyborgFactory();
-        if (source.cyborgs == 0)
-          return;
-        var attackers = gameState.getFactoryTroopsComing(target).fold(0, (sum, troop) => sum + troop.cyborgs);
-        var afterFight = gameState.getCyborgsOnStep(getDistanceBetween(target.id, source.id) + 1, target) - attackers;
-        if (afterFight < 0)
-          return;
-        moves.add('MOVE ' + [source.id, target.id, afterFight + 1].join(' '));
-      });
-      if (moves.isEmpty)
-        print('WAIT');
-      else
-        print(moves.join(';'));
-    } else
+    var toPrint = [];
+    if (bombs.isNotEmpty)
+      toPrint.addAll(bombs.map((single) => 'BOMB '+single.join(' ')));
+    if (move.isNotEmpty)
+      toPrint.addAll(move.map((single) => 'MOVE '+single.take(3).join(' ')+'; MSG '+single.removeLast()));
+    if (toPrint.isNotEmpty)
+      print(toPrint.join(';'));
+    else
       print('WAIT');
     Logger.info('elapsed: ${watch.elapsedMilliseconds}');
     Logger.debug('end');
@@ -141,7 +146,7 @@ class StatesHolder {
 
   GameState getStateAtStep(int step) {
     for (var i = 0; i <= step; i++) {
-      if (states[i] == null)
+      if (states.length - 1 < i)
         getNextState(states[i-1]);
       if (i == step)
         return states[i];
@@ -151,7 +156,7 @@ class StatesHolder {
 
   GameState getNextState(GameState gameState) {
     int step = states.indexOf(gameState);
-    if (states[step + 1] != null)
+    if (states.length > step + 1)
       return states[step + 1];
     var factories = cloneMapOfClonables(gameState.factories);
     var troops = cloneMapOfClonables(gameState.troops);
@@ -165,7 +170,8 @@ class StatesHolder {
         factory.cyborgs += factory.production;
       // Solve battles
       var myCyborgs = 0, enemyCyborgs = 0;
-      var participants = troops.values.where((Troop troop) => troop.factoryTo == factory.id && troop.turns == 0);
+      List<Troop> participants = troops.values
+          .where((Troop troop) => troop.factoryTo == factory.id && troop.turns == 0).toList();
       participants.forEach((troop) {
         if (troop.isMine())
           myCyborgs++;
@@ -187,9 +193,10 @@ class StatesHolder {
         }
       }
       // Explode bombs
-      List<Bomb> toExplode = bombs.values.where((Bomb bomb) => bomb.factoryTo == factory.id && bomb.turns == 0);
+      List<Bomb> toExplode = bombs.values.where((Bomb bomb) => bomb.factoryTo == factory.id && bomb.turns == 0)
+          .toList();
       toExplode.forEach((bomb) {
-        factory.cyborgs = max(0, factory.cyborgs - max(10, factory.cyborgs / 2));
+        factory.cyborgs = max(0, factory.cyborgs - max(10, (factory.cyborgs / 2).floor()));
         factory.disabled = 5;
         bombs.remove(bomb.id);
       });
@@ -202,6 +209,11 @@ class StatesHolder {
     states.add(nextGameState);
 
     return nextGameState;
+  }
+
+  Factory getFactoryAtStep(int id, int step) {
+    var state = getStateAtStep(step);
+    return state.factories[id];
   }
 }
 
@@ -216,6 +228,10 @@ class GameState {
 
   List<Factory> getOwnFactoriesWithCyborgs() {
     return factories.values.where((factory) => factory.isMine() && factory.cyborgs > 0).toList();
+  }
+
+  List<Factory> getOwnFactories() {
+    return factories.values.where((factory) => factory.isMine()).toList();
   }
 
   Factory getMostCyborgFactory() {
@@ -233,6 +249,150 @@ class GameState {
   getTargetFactory() {
     return factories.values.fold(0, (sum, factory) => sum + (factory.isMine() ? factory.cyborgs : 0));
   }
+
+  List<Factory> getEnemyFactories() {
+    return factories.values.where((factory) => !factory.isMine());
+  }
+
+  int getScoreDiff() {
+    int my = 0, enemy = 0;
+    factories.values.forEach((factory) {
+      if (factory.isMine())
+        my += factory.cyborgs;
+      else if (!factory.isNeutral())
+        enemy += factory.cyborgs;
+    });
+    troops.values.forEach((troop) {
+      if (troop.isMine())
+        my += troop.cyborgs;
+      else
+        enemy += troop.cyborgs;
+    });
+    return my - enemy;
+  }
+
+  List<Factory> getLargestFactories() {
+    return factories.values.where((factory) => factory.isOpponent()).toList()
+      ..sort((a, b) => b.cyborgs.compareTo(a.cyborgs));
+  }
+}
+
+/**
+ * Works with distances preprocessing with Floyd-Warshall algorithm.
+ */
+class Distances {
+  List<List<int>> _matrix;
+  List<List<int>> _next;
+  Map<StatesHolder, Map<String, Map>> _statePathCache = {};
+
+  Distances(int size, List<List<int>> distances) {
+    List<List<int>> init = new List(size);
+    _next = new List(size);
+    distances.forEach((distance) {
+      if (init[distance[0]] == null)
+        init[distance[0]] = new List(size);
+      if (init[distance[1]] == null)
+        init[distance[1]] = new List(size);
+      if (_next[distance[0]] == null)
+        _next[distance[0]] = new List(size);
+      if (_next[distance[1]] == null)
+        _next[distance[1]] = new List(size);
+      init[distance[0]][distance[1]] = distance[2];
+      init[distance[1]][distance[0]] = distance[2];
+      _next[distance[0]][distance[1]] = distance[1];
+      _next[distance[1]][distance[0]] = distance[0];
+    });
+    for (var i = 0; i < init.length; i++) {
+      init[i][i] = 0;
+    }
+
+    _doItFloyd(init);
+  }
+
+  _doItFloyd(List<List<int>> init) {
+    _matrix = init;
+    for (var k = 0; k < _matrix.length; k++) {
+      for (var i = 0; i < _matrix.length; i++) {
+        for (var j = 0; j < _matrix.length; j++) {
+          if (_matrix[i][j] > _matrix[i][k] + _matrix[k][j]) {
+            _matrix[i][j] = _matrix[i][k] + _matrix[k][j];
+            _next[i][j] = _next[i][k];
+          }
+        }
+      }
+    }
+  }
+
+  Map getPath(int i, int j, StatesHolder statesHolder) {
+    if (i == j)
+      throw new Exception('i == j == ${i}');
+    if (_statePathCache[statesHolder] == null)
+      _statePathCache[statesHolder] = {};
+    if (_statePathCache[statesHolder]['${i} ${j}'] != null)
+      return _statePathCache[statesHolder]['${i} ${j}'];
+    List<int> path = [i];
+    int current = i, length = 0, next;
+    while (j != current) {
+      next = _next[current][j];
+      length += _matrix[current][next];
+      // Don't try to move via enemy factories with cyborgs
+      var factory = statesHolder.getFactoryAtStep(next, length);
+      if (!factory.isMine() && factory.cyborgs > 0) {
+        length = _matrix[i][j];
+        path = [i, j];
+        break;
+      }
+      path.add(next);
+      current = next;
+    }
+    _statePathCache[statesHolder]['${i} ${j}'] = {'length': length, 'path': path};
+    return _statePathCache[statesHolder]['${i} ${j}'];
+  }
+
+  /**
+   * Returns max distance from each [to] to other vertices.
+   */
+  Map<int, int> getDistancesTo(List<int> to, StatesHolder statesHolder) {
+    Map<int, int> distances = {};
+    to.forEach((vertex) {
+      for (var i = 0; i < _matrix.length; i++) {
+          if (to.contains(i))
+            continue;
+          if (distances[i] == null)
+            distances[i] = 0;
+          distances[i] = max(distances[i], getPath(vertex, i, statesHolder)['length']);
+      }
+    });
+    return distances;
+  }
+
+  List<List<int>> getClosest(int to, List<int> among, StatesHolder statesHolder) {
+    Map<int, List<int>> distances = {};
+    for (var i = 0; i < _matrix.length; i++) {
+      if (to == i || !among.contains(i))
+        continue;
+      if (distances[i] == null)
+        distances[i] = [i, 0];
+      distances[i] = [i, max(distances[i][1], getPath(i, to, statesHolder)['length'])];
+    }
+    List<List<int>> ordered = distances.values.toList()..sort((a, b) => a[1].compareTo(b[1]));
+
+    return ordered;
+  }
+
+  int getClosestSimple(int to, List<int> among) {
+    int min, closest = 0;
+    for (var i = 0; i < _matrix.length; i++) {
+      if (to == i || !among.contains(i))
+        continue;
+      if (min == null || _matrix[i][to] < min) {
+        min = _matrix[i][to];
+        closest = i;
+      }
+    }
+
+    return closest;
+  }
 }
 
 class Factory {
@@ -243,6 +403,8 @@ class Factory {
   isMine() => owner == 1;
 
   isNeutral() => owner == 0;
+
+  isOpponent() => owner == -1;
 
   Factory clone() => new Factory(id, owner, cyborgs, production, disabled);
 
