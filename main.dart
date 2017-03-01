@@ -16,6 +16,14 @@ Map<dynamic, dynamic> cloneMapOfClonables(Map<dynamic, dynamic> from) {
   return newMap;
 }
 
+List<List> cloneListOfLists(List<List> from) {
+  var res = [];
+  for (var i = 0; i < from.length; i++) {
+    res.add(new List.from(from[i]));
+  }
+  return res;
+}
+
 class Game {
   Stopwatch watch = new Stopwatch();
   int factoryCount, linkCount;
@@ -79,8 +87,9 @@ class Game {
     var targets = distances.getDistancesTo(to, statesHolder);
     List<int> ordered = targets.keys.toList();
     ordered.sort((a, b) {
-      var aWeight = targets[a]/* + gameState.factories[a].cyborgs*/ - gameState.factories[a].production * 2;
-      var bWeight = targets[b]/* + gameState.factories[b].cyborgs*/ - gameState.factories[b].production * 2;
+      // ??? + gameState.factories[a].cyborgs
+      var aWeight = targets[a] - gameState.factories[a].production;
+      var bWeight = targets[b] - gameState.factories[b].production;
       return aWeight.compareTo(bWeight);
     });
 
@@ -108,7 +117,10 @@ class Game {
       var i = 0, cyborgsSent = 0, enemyCyborgs = 0;
       while (i < closestOurs.length && cyborgsSent <= enemyCyborgs) {
         var from = closestOurs[i];
-        enemyCyborgs = statesHolder.getFactoryAtStep(factoryId, from[1]).cyborgs;
+        var targetAtStep = statesHolder.getFactoryAtStep(factoryId, from[1] + 1);
+        if (targetAtStep.isMine())
+          break;
+        enemyCyborgs = targetAtStep.cyborgs;
         var cyborgs = min(enemyCyborgs - cyborgsSent + 1, factoriesLocal[from[0]].cyborgs);
         cyborgsSent += cyborgs;
         factoriesLocal[from[0]].cyborgs -= cyborgs;
@@ -118,7 +130,7 @@ class Game {
         }
         i++;
       }
-      if (cyborgsSent >= enemyCyborgs) {
+      if (cyborgsSent > enemyCyborgs) {
         move.addAll(attackers);
         factoriesGlobal = factoriesLocal;
       }
@@ -128,10 +140,10 @@ class Game {
       toPrint.addAll(bombs.map((single) => 'BOMB '+single.join(' ')));
     if (move.isNotEmpty)
       toPrint.addAll(move.map((single) => 'MOVE '+single.take(3).join(' ')+'; MSG '+single.removeLast()));
-    if (toPrint.isNotEmpty)
-      print(toPrint.join(';'));
-    else
-      print('WAIT');
+    if (toPrint.isEmpty)
+      toPrint.add('WAIT');
+    toPrint.add('MSG ${watch.elapsedMilliseconds} ms');
+    print(toPrint.join(';'));
     Logger.info('elapsed: ${watch.elapsedMilliseconds}');
     Logger.debug('end');
   }
@@ -144,17 +156,17 @@ class StatesHolder {
     states.add(state);
   }
 
-  GameState getStateAtStep(int step) {
+  GameState _getStateAtStep(int step) {
     for (var i = 0; i <= step; i++) {
       if (states.length - 1 < i)
-        getNextState(states[i-1]);
+        _getNextState(states[i-1]);
       if (i == step)
         return states[i];
     }
     throw new Exception('Should return step ${step}');
   }
 
-  GameState getNextState(GameState gameState) {
+  GameState _getNextState(GameState gameState) {
     int step = states.indexOf(gameState);
     if (states.length > step + 1)
       return states[step + 1];
@@ -174,9 +186,9 @@ class StatesHolder {
           .where((Troop troop) => troop.factoryTo == factory.id && troop.turns == 0).toList();
       participants.forEach((troop) {
         if (troop.isMine())
-          myCyborgs++;
+          myCyborgs += troop.cyborgs;
         else
-          enemyCyborgs++;
+          enemyCyborgs += troop.cyborgs;
         troops.remove(troop.id);
       });
       var winner = myCyborgs - enemyCyborgs;
@@ -212,7 +224,7 @@ class StatesHolder {
   }
 
   Factory getFactoryAtStep(int id, int step) {
-    var state = getStateAtStep(step);
+    var state = _getStateAtStep(step);
     return state.factories[id];
   }
 }
@@ -282,31 +294,32 @@ class GameState {
  */
 class Distances {
   List<List<int>> _matrix;
+  List<List<int>> _init;
   List<List<int>> _next;
   Map<StatesHolder, Map<String, Map>> _statePathCache = {};
 
   Distances(int size, List<List<int>> distances) {
-    List<List<int>> init = new List(size);
+    _init = new List(size);
     _next = new List(size);
     distances.forEach((distance) {
-      if (init[distance[0]] == null)
-        init[distance[0]] = new List(size);
-      if (init[distance[1]] == null)
-        init[distance[1]] = new List(size);
+      if (_init[distance[0]] == null)
+        _init[distance[0]] = new List(size);
+      if (_init[distance[1]] == null)
+        _init[distance[1]] = new List(size);
       if (_next[distance[0]] == null)
         _next[distance[0]] = new List(size);
       if (_next[distance[1]] == null)
         _next[distance[1]] = new List(size);
-      init[distance[0]][distance[1]] = distance[2];
-      init[distance[1]][distance[0]] = distance[2];
+      _init[distance[0]][distance[1]] = distance[2];
+      _init[distance[1]][distance[0]] = distance[2];
       _next[distance[0]][distance[1]] = distance[1];
       _next[distance[1]][distance[0]] = distance[0];
     });
-    for (var i = 0; i < init.length; i++) {
-      init[i][i] = 0;
+    for (var i = 0; i < _init.length; i++) {
+      _init[i][i] = 0;
     }
 
-    _doItFloyd(init);
+    _doItFloyd(cloneListOfLists(_init));
   }
 
   _doItFloyd(List<List<int>> init) {
@@ -338,8 +351,9 @@ class Distances {
       // Don't try to move via enemy factories with cyborgs
       var factory = statesHolder.getFactoryAtStep(next, length);
       if (!factory.isMine() && factory.cyborgs > 0) {
-        length = _matrix[i][j];
-        path = [i, j];
+        length -= _matrix[current][next];
+        length += _init[path.last][j];
+        path.add(j);
         break;
       }
       path.add(next);
