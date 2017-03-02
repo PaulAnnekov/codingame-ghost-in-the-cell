@@ -31,6 +31,7 @@ class Game {
   StatesHolder statesHolder;
   Distances distances;
   int bombsCount = 2;
+  Map<int, int> factoryBlock;
 
   void start() {
     _readInput();
@@ -88,18 +89,15 @@ class Game {
     List<int> ordered = targets.keys.toList();
     ordered.sort((a, b) {
       // ??? + gameState.factories[a].cyborgs
-      var aWeight = targets[a] - gameState.factories[a].production;
-      var bWeight = targets[b] - gameState.factories[b].production;
+      var aWeight = targets[a] - gameState.factories[a].production * 2;
+      var bWeight = targets[b] - gameState.factories[b].production * 2;
       return aWeight.compareTo(bWeight);
     });
 
     return ordered;
   }
 
-  void _loop() {
-    _readEntities();
-    Logger.info('loop');
-    var ownFactories = gameState.getOwnFactoriesWithCyborgs().fold([], (List ids, factory) => ids..add(factory.id));
+  List<List<int>> strategyBomb() {
     List<List<int>> bombs = [];
     if (gameState.getScoreDiff() < -10 && bombsCount > 0) {
       Factory target = gameState.getLargestFactories()[0];
@@ -107,6 +105,37 @@ class Game {
       bombs.add([distances.getClosestSimple(target.id, own), target.id]);
       bombsCount--;
     }
+    return bombs;
+  }
+
+  strategyDefend() {
+    var ownFactories = gameState.getOwnFactories()..sort((a, b) => b.production.compareTo(a.production));
+    //var ownWithCyborgs = gameState.getOwnFactoriesWithCyborgs().fold([], (List ids, factory) => ids..add(factory.id));
+    ownFactories.forEach((factory) {
+      var troops = gameState.getEnemyTroopsTo(factory.id)..sort((a, b) => a.turns.compareTo(b.turns));
+      factoryBlock[factory.id] = 0;
+      if (troops.isEmpty)
+        return;
+      var factoryState = statesHolder.getFactoryAtStep(factory.id, troops.last.turns);
+      if (!factoryState.isMine())
+        return;
+      Logger.debug('Successfully saved ${factory.id} from capture');
+      var enemies = troops.fold(0, (sum, troop) => sum + troop.cyborgs);
+      factoryBlock[factory.id] = min(factory.cyborgs, enemies);
+      /*if (factoryState.isMine())
+        return;*/
+      /*var closest = distances.getClosest(factory.id, ownWithCyborgs, statesHolder);
+      closest.takeWhile((info) {
+        var factoryHelp = statesHolder.getFactoryAtStep(factory.id, info[1]);
+        if (!factoryHelp.isMine())
+      });*/
+    });
+  }
+
+  List<List<int>> strategyAttack() {
+    // TODO: shit happens here!!! own factories WITH CYBORGS (can be w/o) are passed to getTargets which returns
+    // attack targets %)
+    var ownFactories = gameState.getOwnFactoriesWithCyborgs().fold([], (List ids, factory) => ids..add(factory.id));
     var closest = getTargets(ownFactories);
     List<List<int>> move = [];
     Map<int, Factory> factoriesGlobal = cloneMapOfClonables(gameState.factories);
@@ -121,12 +150,12 @@ class Game {
         if (targetAtStep.isMine())
           break;
         enemyCyborgs = targetAtStep.cyborgs;
-        var cyborgs = min(enemyCyborgs - cyborgsSent + 1, factoriesLocal[from[0]].cyborgs);
+        var cyborgs = min(enemyCyborgs - cyborgsSent + 1, factoriesLocal[from[0]].cyborgs - factoryBlock[from[0]]);
         cyborgsSent += cyborgs;
         factoriesLocal[from[0]].cyborgs -= cyborgs;
         if (cyborgs > 0) {
           attackers.add([from[0], distances.getPath(from[0], factoryId, statesHolder)['path'][1], cyborgs,
-            'to ${factoryId}']);
+          'to ${factoryId}']);
         }
         i++;
       }
@@ -135,6 +164,17 @@ class Game {
         factoriesGlobal = factoriesLocal;
       }
     });
+
+    return move;
+  }
+
+  void _loop() {
+    _readEntities();
+    factoryBlock = {};
+    Logger.info('loop');
+    List<List<int>> bombs = strategyBomb();
+    strategyDefend();
+    List<List<int>> move = strategyAttack();
     var toPrint = [];
     if (bombs.isNotEmpty)
       toPrint.addAll(bombs.map((single) => 'BOMB '+single.join(' ')));
@@ -236,6 +276,10 @@ class GameState {
 
   getOwnCyborgsCount() {
     return factories.values.fold(0, (sum, factory) => sum + (factory.isMine() ? factory.cyborgs : 0));
+  }
+
+  List<Troop> getEnemyTroopsTo(int factoryId) {
+    return troops.values.where((troop) => troop.factoryTo == factoryId && !troop.isMine()).toList();
   }
 
   List<Factory> getOwnFactoriesWithCyborgs() {
