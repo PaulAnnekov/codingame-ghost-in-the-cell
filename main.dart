@@ -292,8 +292,9 @@ class StatesHolder {
     nextGameState.troops.forEach((id, troop) => troop.turns--);
     nextGameState.bombs.forEach((id, bomb) => bomb.turns--);
     nextGameState.factories.forEach((id, factory) {
+      factory.disabled -= factory.disabled > 0 ? 1 : 0;
       // Increase cyborgs on factory
-      if (!factory.isNeutral())
+      if (!factory.isNeutral() && factory.disabled == 0)
         factory.cyborgs += factory.production;
       // Solve battles
       var myCyborgs = 0, enemyCyborgs = 0;
@@ -323,7 +324,7 @@ class StatesHolder {
       List<Bomb> toExplode = nextGameState.bombs.values
           .where((Bomb bomb) => bomb.factoryTo == factory.id && bomb.turns == 0).toList();
       toExplode.forEach((bomb) {
-        factory.cyborgs = max(0, factory.cyborgs - max(10, (factory.cyborgs / 2).floor()));
+        factory.cyborgs = max(0, factory.cyborgs - max(10, (factory.cyborgs / 2).ceil()));
         factory.disabled = 5;
         nextGameState.bombs.remove(bomb.id);
       });
