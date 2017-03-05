@@ -86,9 +86,6 @@ class Game {
     GameState gameState = statesHolder.current();
     var targets = gameState.factories.values.where((f) => !f.isMine());
     var ordered = [];
-    // Everything is ours, win.
-    if (targets.isEmpty)
-      return ordered;
     var own = gameState.factories.values.where((f) => f.isMine());
     var enemies = gameState.factories.values.where((f) => f.isOpponent());
     targets.forEach((target) {
@@ -114,8 +111,10 @@ class Game {
     ordered = ordered.map((f) => f[0]).toList();
 
     if (ordered.isEmpty) {
-      ordered.add(distances.getClosest(targets.where((f) => f.isOpponent()).map((f) => f.id).toList(),
-          own.map((f) => f.id).toList(), statesHolder));
+      var targetId = distances.getClosest(targets.where((f) => f.isOpponent()).map((f) => f.id).toList(),
+          own.map((f) => f.id).toList(), statesHolder);
+      if (targetId != null)
+        ordered.add(targetId);
     }
 
     return ordered;
