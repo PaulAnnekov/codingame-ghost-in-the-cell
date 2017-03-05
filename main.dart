@@ -110,6 +110,8 @@ class Game {
       var own = gameState.getOwnFactories().fold([], (List ids, factory) => ids..add(factory.id));
       var from;
       var target = targets.firstWhere((target) {
+        if (gameState.bombs.values.any((b) => b.factoryTo == target.id))
+          return false;
         from = distances.getClosestSimple(target.id, own);
         var factory = statesHolder.getFactoryAtStep(target.id, from['length']);
         return factory.currentProduction() > 0;
