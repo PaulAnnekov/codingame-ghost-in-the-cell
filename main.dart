@@ -95,8 +95,10 @@ class Game {
         minOurs = min(minOurs, distances.getPath(our.id, target.id, statesHolder)['length']);
       });
       enemies.forEach((enemy) {
-        if (enemy.id == target.id)
+        if (enemy.id == target.id) {
+          minEnemy = 0;
           return;
+        }
         minEnemy = min(minEnemy, distances.getPath(enemy.id, target.id, statesHolder, true)['length']);
       });
       if (minOurs < minEnemy && target.production > 0 || minOurs == minEnemy)
@@ -226,16 +228,20 @@ class Game {
         var targetAtStep = statesHolder.getFactoryAtStep(factoryId, from[1] + 1);
         if (targetAtStep.isMine())
           break;
+        i++;
         enemyCyborgs = targetAtStep.cyborgs;
         var cyborgs = min(enemyCyborgs - cyborgsSent + 1, newGameState.getFreeCyborgs(from[0]));
-        cyborgsSent += cyborgs;
         if (cyborgs > 0) {
           var path = distances.getPath(from[0], factoryId, statesHolder)['path'];
+          // Don't move to factory at the same time when bomb will arrive.
+          if (statesHolder.getStep(from[1]).bombs.values.any((b) => b.factoryTo == factoryId && path.length == 2 &&
+              b.turns == 1))
+            continue;
+          cyborgsSent += cyborgs;
           // TODO: check correct turn
           newGameState.moveTroop(from[0], path[1], cyborgs, distances.getDistanceDirect(from[0], path[1]));
           attackers.add([from[0], path[1], cyborgs, 'to ${factoryId}']);
         }
-        i++;
       }
       if (cyborgsSent > enemyCyborgs) {
         move.addAll(attackers);
