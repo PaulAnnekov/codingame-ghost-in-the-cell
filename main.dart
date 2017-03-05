@@ -95,19 +95,17 @@ class Game {
         minOurs = min(minOurs, distances.getPath(our.id, target.id, statesHolder)['length']);
       });
       enemies.forEach((enemy) {
-        if (enemy.id == target.id) {
-          minEnemy = 0;
+        if (enemy.id == target.id)
           return;
-        }
         minEnemy = min(minEnemy, distances.getPath(enemy.id, target.id, statesHolder, true)['length']);
       });
-      if (minOurs < minEnemy && target.production > 0 || minOurs == minEnemy)
+      if (minOurs < minEnemy && target.production > 0)
         ordered.add([target.id, minOurs]);
     });
 
     ordered.sort((a, b) {
-      var aWeight = a[1] - gameState.factories[a[0]].production * 2;
-      var bWeight = b[1] - gameState.factories[b[0]].production * 2;
+      var aWeight = a[1] - gameState.factories[a[0]].production * 2 + gameState.factories[a[0]].cyborgs;
+      var bWeight = b[1] - gameState.factories[b[0]].production * 2 + gameState.factories[b[0]].cyborgs;
       return aWeight.compareTo(bWeight);
     });
     ordered = ordered.map((f) => f[0]).toList();
@@ -268,14 +266,26 @@ class Game {
   List<String> strategyRemains() {
     List<String> actions = [];
     GameState gameState = statesHolder.current();
-    var newTroops = gameState.troops.values.where((t) => t.isNew).map((t) => t.factoryTo);
-    var enemyFactories = gameState.factories.values.where((f) => f.isOpponent() && !newTroops.contains(f.id))
-        .map((f) => f.id).toList();
+    var enemyFactories = gameState.factories.values.where((f) => f.isOpponent()).map((f) => f.id).toList();
     if (enemyFactories.isEmpty)
       return actions;
-    var ownFactories = gameState.factories.values.where((f) => f.isMine() || newTroops.contains(f.id)).map((f) => f.id)
+    var ownFactories = gameState.factories.values.where((f) => f.isMine()).map((f) => f.id)
         .toList();
-    int closest = distances.getClosest(ownFactories, enemyFactories, statesHolder);
+
+    int closest;
+    double distance = double.MAX_FINITE;
+    enemyFactories.forEach((fromId) {
+      var sum = 0;
+      ownFactories.forEach((toId) {
+        sum += distances.getPath(fromId, toId, statesHolder)['length'];
+      });
+      var avg = sum / ownFactories.length - gameState.factories[fromId].cyborgs;
+      if (avg < distance) {
+        closest = fromId;
+        distance = avg;
+      }
+    });
+
     gameState.getOwnFactoriesWithCyborgs().forEach((factory) {
       var freeCyborgs = gameState.getFreeCyborgs(factory.id);
       if (freeCyborgs <= 0 || factory.id == closest)
