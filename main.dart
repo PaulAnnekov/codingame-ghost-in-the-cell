@@ -84,18 +84,39 @@ class Game {
 
   List<int> getTargets(List<int> to) {
     GameState gameState = statesHolder.current();
-    /*var targets = gameState.factories.values.map((f) => !f.isMine());
-    targets.forEach(() {
+    var targets = gameState.factories.values.where((f) => !f.isMine());
+    var ordered = [];
+    // Everything is ours, win.
+    if (targets.isEmpty)
+      return ordered;
+    var own = gameState.factories.values.where((f) => f.isMine());
+    var enemies = gameState.factories.values.where((f) => f.isOpponent());
+    targets.forEach((target) {
+      var minOurs = double.MAX_FINITE.toInt();
+      var minEnemy = double.MAX_FINITE.toInt();
+      own.forEach((our) {
+        minOurs = min(minOurs, distances.getPath(our.id, target.id, statesHolder)['length']);
+      });
+      enemies.forEach((enemy) {
+        if (enemy.id == target.id)
+          return;
+        minEnemy = min(minEnemy, distances.getPath(enemy.id, target.id, statesHolder, true)['length']);
+      });
+      if (minOurs < minEnemy && target.production > 0 || minOurs == minEnemy)
+        ordered.add([target.id, minOurs]);
+    });
 
-    });*/
-    var targets = distances.getMaxDistancesTo(to, statesHolder);
-    List<int> ordered = targets.keys.toList();
     ordered.sort((a, b) {
-      // ??? + gameState.factories[a].cyborgs
-      var aWeight = targets[a] - gameState.factories[a].production * 2;
-      var bWeight = targets[b] - gameState.factories[b].production * 2;
+      var aWeight = a[1] - gameState.factories[a[0]].production * 2;
+      var bWeight = b[1] - gameState.factories[b[0]].production * 2;
       return aWeight.compareTo(bWeight);
     });
+    ordered = ordered.map((f) => f[0]).toList();
+
+    if (ordered.isEmpty) {
+      ordered.add(distances.getClosest(targets.where((f) => f.isOpponent()).map((f) => f.id).toList(),
+          own.map((f) => f.id).toList(), statesHolder));
+    }
 
     return ordered;
   }
@@ -192,8 +213,6 @@ class Game {
 
   List<List<int>> strategyAttack() {
     GameState gameState = statesHolder.current();
-    // TODO: shit happens here!!! own factories WITH CYBORGS (can be w/o) are passed to getTargets which returns
-    // attack targets %)
     var ownFactories = gameState.getOwnFactoriesWithCyborgs().fold([], (List ids, factory) => ids..add(factory.id));
     var closest = getTargets(ownFactories);
     List<List<int>> move = [];
@@ -535,10 +554,10 @@ class Distances {
     return _init[from][to];
   }
 
-  Map getPath(int i, int j, StatesHolder statesHolder) {
+  Map getPath(int i, int j, StatesHolder statesHolder, [bool isEnemy = false]) {
     if (i == j)
       throw new Exception('i == j == ${i}');
-    var cacheKey = '${statesHolder.hashCode} ${statesHolder.id}';
+    var cacheKey = '${statesHolder.hashCode} ${statesHolder.id} ${isEnemy}';
     if (_statePathCache[cacheKey] == null)
       _statePathCache[cacheKey] = {};
     if (_statePathCache[cacheKey]['${i} ${j}'] != null)
@@ -550,7 +569,7 @@ class Distances {
       length += _matrix[current][next];
       // Don't try to move via enemy factories with cyborgs
       var factory = statesHolder.getFactoryAtStep(next, length);
-      if (!factory.isMine() && factory.cyborgs > 0) {
+      if ((!isEnemy && !factory.isMine() || isEnemy && !factory.isOpponent()) && factory.cyborgs > 0) {
         length -= _matrix[current][next];
         length += _init[path.last][j];
         path.add(j);
